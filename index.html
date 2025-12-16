@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Escaner PRE-TEÑIDO (Susan)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <style>
+        body { background: #000; color: white; overflow: hidden; touch-action: manipulation; }
+        #reader__scan_region { background: white !important; }
+        video { object-fit: cover !important; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const firebaseConfig = {
+            apiKey: "AIzaSyBqHgV4vDat1-VmZfKbiPg7nuiX-ROcexw",
+            authDomain: "cirineo-cec21.firebaseapp.com",
+            projectId: "cirineo-cec21",
+            storageBucket: "cirineo-cec21.firebasestorage.app",
+            messagingSenderId: "620210618284",
+            appId: "1:620210618284:web:482bab9bf74650fff18409"
+        };
+        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        const Icon = ({ name, size = 24, className = "" }) => {
+            const ref = useRef(null);
+            useEffect(() => { 
+                if (ref.current) {
+                    ref.current.innerHTML = '';
+                    const svg = lucide.icons[name]?.toSvg({ width: size, height: size, class: className });
+                    if(svg) ref.current.innerHTML = svg;
+                }
+            }, [name, size, className]);
+            return <span ref={ref} className="inline-flex"></span>;
+        };
+
+        const ScannerModal = ({ onClose, ordersCache }) => {
+            const [activePkg, setActivePkg] = useState(null);
+            const [isSaving, setIsSaving] = useState(false);
+            const scannerRef = useRef(null);
+
+            useEffect(() => {
+                const scanner = new Html5QrcodeScanner("reader", { 
+                    fps: 15, 
+                    qrbox: { width: 320, height: 120 },
+                    aspectRatio: 1.0
+                });
+                scanner.render((text) => {
+                    const code = text.trim().toUpperCase();
+                    let found = null;
+                    ordersCache.forEach(o => {
+                        const p = o.progreso?.find(pkg => pkg.codigoUnico === code);
+                        if (p) found = { pkg: p, orderId: o.id, code };
+                    });
+                    if (found) { setActivePkg(found); scanner.pause(true); }
+                });
+                scannerRef.current = scanner;
+                return () => scanner.clear().catch(e => {});
+            }, [ordersCache]);
+
+            const updateStatus = async (status, note = "") => {
+                setIsSaving(true);
+                const orderRef = db.collection('orders').doc(String(activePkg.orderId));
+                await db.runTransaction(async (transaction) => {
+                    const doc = await transaction.get(orderRef);
+                    const progreso = doc.data().progreso;
+                    const pkgIndex = progreso.findIndex(p => p.codigoUnico === activePkg.code);
+                    if (pkgIndex !== -1) {
+                        let history = progreso[pkgIndex].trackingHistory || [];
+                        let finalStatus = status;
+                        if (status === 'GREEN' && history.some(h => h.step === 'SUSAN' && h.status === 'RED')) finalStatus = 'ORANGE';
+                        history.push({ step: 'SUSAN', status: finalStatus, timestamp: new Date().toISOString(), user: 'SUSAN', note });
+                        progreso[pkgIndex].trackingHistory = history;
+                        progreso[pkgIndex].currentStep = 'SUSAN';
+                        transaction.update(orderRef, { progreso });
+                    }
+                });
+                setIsSaving(false); setActivePkg(null); scannerRef.current.resume();
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black z-50 flex flex-col">
+                    <div id="reader" className={`${activePkg ? 'hidden' : 'block'} w-full`}></div>
+                    <div className="p-6 flex-grow flex flex-col items-center justify-center">
+                        {activePkg && (
+                            <div className="w-full bg-slate-900 rounded-3xl p-6 border-2 border-amber-500 animate-in zoom-in">
+                                <h3 className="text-2xl font-black mb-1">{activePkg.code}</h3>
+                                <p className="text-slate-400 mb-8 uppercase text-sm italic">{activePkg.pkg?.piezaNombre || ''}</p>
+                                <div className="grid grid-cols-1 gap-4">
+                                    <button onClick={() => updateStatus('GREEN', 'Recibido')} className="bg-green-600 p-5 rounded-2xl font-black text-xl flex items-center justify-center gap-3">
+                                        <Icon name="check-circle" size={28}/> RECIBIDO OK
+                                    </button>
+                                    <button onClick={() => { const n = prompt("Nota:"); if(n) updateStatus('RED', n); }} className="bg-red-600 p-5 rounded-2xl font-black text-xl flex items-center justify-center gap-3">
+                                        <Icon name="alert-triangle" size={28}/> CON PROBLEMAS
+                                    </button>
+                                    <button onClick={() => { setActivePkg(null); scannerRef.current.resume(); }} className="mt-4 text-slate-500 font-bold uppercase text-xs">Cancelar</button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [orders, setOrders] = useState([]);
+            const [show, setShow] = useState(false);
+            useEffect(() => {
+                return db.collection('orders').where('status', '!=', 'ARCHIVADO').onSnapshot(s => setOrders(s.docs.map(d => ({...d.data(), id: d.id}))));
+            }, []);
+            return (
+                <div className="h-screen flex flex-col items-center justify-center p-6 bg-slate-950">
+                    <h1 className="text-3xl font-black text-amber-500 mb-8 tracking-tighter italic flex items-center gap-2">
+                        <Icon name="clipboard-check" size={32} /> CIRINEO <span className="text-white">PRE-TEÑIDO</span>
+                    </h1>
+                    <button onClick={() => setShow(true)} className="w-full aspect-square bg-slate-900 border-4 border-amber-500 rounded-full flex flex-col items-center justify-center gap-4 shadow-[0_0_40px_rgba(245,158,11,0.2)]">
+                        <Icon name="camera" size={60} className="text-amber-400"/>
+                        <span className="font-bold text-xl uppercase tracking-widest text-white">Escanear Susan</span>
+                    </button>
+                    {show && <ScannerModal onClose={() => setShow(false)} ordersCache={orders} />}
+                </div>
+            );
+        };
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
