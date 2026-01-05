@@ -2,211 +2,280 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Escaner PRE-TEÑIDO (Susan) - Corregido</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cirineo Kit Pro V5 (DB + 4x6)</title>
+    
+    <link rel="icon" href="https://raw.githubusercontent.com/jesusvn1993mplvt3-ai/CIRINEO/refs/heads/main/icon.ico">
+
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://unpkg.com/html5-qrcode"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.0/dist/JsBarcode.all.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+
+    <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@700&family=Roboto+Condensed:wght@400;700&display=swap" rel="stylesheet">
+
     <style>
-        body { background: #000; color: white; overflow: hidden; touch-action: manipulation; }
-        /* Forzado de área de escaneo rectangular */
-        #reader__scan_region { background: white !important; }
-        #reader__dashboard { display: none !important; } /* Oculta botones extra de la librería */
-        video { object-fit: cover !important; width: 100% !important; height: 100% !important; }
+        body { background-color: #0f172a; font-family: 'Roboto Condensed', sans-serif; }
+        
+        /* LIENZO ESTRICTO 4x6 */
+        .kit-label-container {
+            width: 4in;
+            height: 6in;
+            background: white;
+            color: black;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .txt-model { font-family: 'Oswald'; font-weight: 700; line-height: 0.85; }
+        .txt-qty { font-family: 'Oswald'; font-weight: 700; line-height: 1; }
+        
+        .kit-table { width: 100%; border-collapse: collapse; }
+        .kit-table th { text-align: left; font-size: 10px; border-bottom: 2px solid #000; padding: 2px; color: #666; }
+        .kit-table td { border-bottom: 1px solid #eee; padding: 4px 2px; vertical-align: middle; }
+
+        .sidebar-scroll::-webkit-scrollbar { width: 4px; }
+        .sidebar-scroll::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
     </style>
 </head>
 <body>
     <div id="root"></div>
-    <script type="text/babel">
-        const { useState, useEffect, useRef } = React;
 
-        const firebaseConfig = {
-            apiKey: "AIzaSyBqHgV4vDat1-VmZfKbiPg7nuiX-ROcexw",
-            authDomain: "cirineo-cec21.firebaseapp.com",
-            projectId: "cirineo-cec21",
-            storageBucket: "cirineo-cec21.firebasestorage.app",
-            messagingSenderId: "620210618284",
-            appId: "1:620210618284:web:482bab9bf74650fff18409"
-        };
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+        
+        const firebaseConfig = { apiKey: "AIzaSyCngQL1pdqghv2vbjkPycT1Xf0C46f7jYs", authDomain: "cirineo-cec21.firebaseapp.com", projectId: "cirineo-cec21", storageBucket: "cirineo-cec21.firebasestorage.app", messagingSenderId: "620210618284", appId: "1:620210618284:web:482bab9bf74650fff18409" };
         if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
 
-        const Icon = ({ name, size = 24, className = "" }) => {
-            const ref = useRef(null);
-            useEffect(() => { 
-                if (ref.current) {
-                    ref.current.innerHTML = '';
-                    const svg = lucide.icons[name]?.toSvg({ width: size, height: size, class: className });
-                    if(svg) ref.current.innerHTML = svg;
-                }
-            }, [name, size, className]);
-            return <span ref={ref} className="inline-flex"></span>;
+        const Icon = ({ name, size=16, className="" }) => {
+            const r = useRef(null);
+            useEffect(() => { if (r.current && lucide.icons[name]) r.current.innerHTML = lucide.icons[name].toSvg({ width: size, height: size }); }, [name, size]);
+            return <span ref={r} className={`inline-flex items-center justify-center ${className}`}/>;
         };
 
-        const ScannerModal = ({ onClose, ordersCache }) => {
-            const [activePkg, setActivePkg] = useState(null);
-            const [isSaving, setIsSaving] = useState(false);
-            const [msg, setMsg] = useState('Enfoca el código de barras...');
-            const html5QrCode = useRef(null);
-
-            useEffect(() => {
-                // Instancia directa para mejor control que el ScannerModal por defecto
-                html5QrCode.current = new Html5Qrcode("reader");
-                
-                const config = { 
-                    fps: 15, 
-                    qrbox: { width: 320, height: 120 }, // Tu visor rectangular
-                    aspectRatio: 1.777778
-                };
-
-                html5QrCode.current.start(
-                    { facingMode: "environment" }, 
-                    config, 
-                    (text) => {
-                        const code = text.trim().toUpperCase();
-                        let found = null;
-                        ordersCache.forEach(o => {
-                            const p = o.progreso?.find(pkg => pkg.codigoUnico === code);
-                            if (p) found = { pkg: p, orderId: o.id, code };
-                        });
-
-                        if (found) {
-                            setActivePkg(found);
-                            setMsg("¡Código Detectado!");
-                            html5QrCode.current.pause(); // Pausa mientras el usuario decide
-                        } else {
-                            setMsg(`No encontrado: ${code}`);
-                        }
-                    }
-                ).catch(err => {
-                    console.error("Error al iniciar cámara:", err);
-                    setMsg("Error al abrir cámara");
+        // Buscador de imágenes inteligente
+        const SmartImage = ({ modelo, repos }) => {
+            const [src, setSrc] = useState(null);
+            const [idx, setIdx] = useState(0);
+            const urls = useMemo(() => {
+                if (!modelo || !repos.length) return [];
+                const res = [];
+                const variants = [modelo, modelo.toLowerCase(), `${modelo}FRENTE`];
+                const exts = ['png', 'jpg', 'web', 'jpeg'];
+                repos.forEach(r => {
+                    const base = r.url.endsWith('/') ? r.url : r.url + '/';
+                    variants.forEach(v => exts.forEach(e => res.push(`${base}${v}.${e}`)));
                 });
+                return res;
+            }, [modelo, repos]);
 
-                return () => {
-                    if (html5QrCode.current) {
-                        html5QrCode.current.stop().catch(() => {});
-                    }
-                };
-            }, [ordersCache]);
+            useEffect(() => { setIdx(0); setSrc(urls[0] || null); }, [urls]);
+            const next = () => { if (idx + 1 < urls.length) { setIdx(idx + 1); setSrc(urls[idx + 1]); } else setSrc(null); };
 
-            const updateStatus = async (status, note = "") => {
-                if (isSaving) return;
-                setIsSaving(true);
-                setMsg("Guardando en la nube...");
-                
-                try {
-                    const orderRef = db.collection('orders').doc(String(activePkg.orderId));
-                    await db.runTransaction(async (transaction) => {
-                        const doc = await transaction.get(orderRef);
-                        const progreso = doc.data().progreso;
-                        const pkgIndex = progreso.findIndex(p => p.codigoUnico === activePkg.code);
-                        
-                        if (pkgIndex !== -1) {
-                            let pkg = progreso[pkgIndex];
-                            let history = pkg.trackingHistory || [];
-                            
-                            let finalStatus = status;
-                            // Lógica naranja si se corrige un rojo previo
-                            if (status === 'GREEN' && history.some(h => h.step === 'SUSAN' && h.status === 'RED')) {
-                                finalStatus = 'ORANGE';
-                            }
-
-                            history.push({
-                                step: 'SUSAN',
-                                status: finalStatus,
-                                timestamp: new Date().toISOString(),
-                                user: 'SUSAN',
-                                note: note
-                            });
-
-                            progreso[pkgIndex] = { ...pkg, currentStep: 'SUSAN', trackingHistory: history };
-                            transaction.update(orderRef, { progreso });
-                        }
-                    });
-
-                    setMsg("¡Cambio Guardado!");
-                    setTimeout(() => {
-                        setActivePkg(null);
-                        setMsg("Escanea siguiente...");
-                        html5QrCode.current.resume();
-                        setIsSaving(false);
-                    }, 1000);
-                } catch (e) {
-                    alert("Error de conexión al guardar");
-                    setIsSaving(false);
-                    html5QrCode.current.resume();
-                }
-            };
-
-            return (
-                <div className="fixed inset-0 bg-black z-50 flex flex-col">
-                    {/* El visor de cámara siempre debe estar en el DOM pero puede ocultarse visualmente */}
-                    <div id="reader" className={`${activePkg ? 'hidden' : 'block'} w-full h-64`}></div>
-                    
-                    <div className="p-6 flex-grow flex flex-col items-center justify-center">
-                        <div className="text-cyan-400 font-bold mb-6 text-xl uppercase text-center">{msg}</div>
-                        
-                        {activePkg && (
-                            <div className="w-full max-w-sm bg-slate-900 rounded-3xl p-6 border-2 border-amber-500 shadow-2xl animate-in zoom-in duration-300">
-                                <h3 className="text-3xl font-black mb-1">{activePkg.code}</h3>
-                                <p className="text-slate-400 uppercase text-sm mb-8 font-bold tracking-widest">
-                                    {activePkg.pkg?.piezaNombre || 'PIEZA SIN NOMBRE'}
-                                </p>
-                                
-                                <div className="grid grid-cols-1 gap-4">
-                                    <button onClick={() => updateStatus('GREEN', 'Recibido OK')} disabled={isSaving} 
-                                            className="bg-green-600 active:bg-green-700 p-5 rounded-2xl font-black text-xl flex items-center justify-center gap-3 transition-colors">
-                                        <Icon name="check-circle" size={28}/> RECIBIDO OK
-                                    </button>
-                                    
-                                    <button onClick={() => { 
-                                        const n = prompt("Describe el problema (falta tela, roto, etc):"); 
-                                        if(n) updateStatus('RED', n);
-                                    }} disabled={isSaving} 
-                                            className="bg-red-600 active:bg-red-700 p-5 rounded-2xl font-black text-xl flex items-center justify-center gap-3 transition-colors">
-                                        <Icon name="alert-triangle" size={28}/> CON PROBLEMAS
-                                    </button>
-                                    
-                                    <button onClick={() => { setActivePkg(null); html5QrCode.current.resume(); }} 
-                                            className="mt-4 text-slate-500 font-bold underline p-2">
-                                        CANCELAR
-                                    </button>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            );
+            if (!src) return <div className="w-full h-full bg-slate-100 flex items-center justify-center text-slate-300"><Icon name="image-off" size={40}/></div>;
+            return <img src={src} onError={next} className="w-full h-full object-contain" />;
         };
 
         const App = () => {
-            const [orders, setOrders] = useState([]);
-            const [show, setShow] = useState(false);
+            const [groups, setGroups] = useState({});
+            const [selectedKey, setSelectedKey] = useState(null);
+            const [checkedPkgs, setCheckedPkgs] = useState({});
+            const [repos, setRepos] = useState([]);
+            const [isSaving, setIsSaving] = useState(false);
+            const [lastKitId, setLastKitId] = useState("");
+            const pdfRef = useRef();
+
             useEffect(() => {
-                return db.collection('orders').where('status', '!=', 'ARCHIVADO').onSnapshot(s => 
-                    setOrders(s.docs.map(d => ({...d.data(), id: d.id})))
-                );
+                db.collection('app_config').doc('imagenes').onSnapshot(d => setRepos(d.data()?.sources || []));
+                return db.collection('orders').where('status','!=','ARCHIVADO').onSnapshot(s => {
+                    const g = {};
+                    s.docs.forEach(doc => {
+                        const d = doc.data();
+                        const key = `${d.codigo}|${d.partida || 'SN'}`;
+                        if(!g[key]) g[key] = { modelo: d.codigo, partida: d.partida || 'SN', cliente: d.cliente, pkgs: [] };
+                        if(d.progreso) d.progreso.forEach(p => g[key].pkgs.push({...p, orderId: doc.id}));
+                    });
+                    setGroups(g);
+                });
             }, []);
 
+            const activePkgs = useMemo(() => selectedKey ? groups[selectedKey].pkgs.sort((a,b)=>a.paqueteNum - b.paqueteNum) : [], [selectedKey, groups]);
+            const selectedList = useMemo(() => activePkgs.filter(p => checkedPkgs[p.codigoUnico]), [activePkgs, checkedPkgs]);
+
+            const handleSaveAndPrint = async () => {
+                setIsSaving(true);
+                try {
+                    const newKitRef = db.collection('kits_produccion').doc();
+                    const kitId = newKitRef.id;
+                    setLastKitId(kitId);
+
+                    await newKitRef.set({
+                        id: kitId,
+                        modelo: groups[selectedKey].modelo,
+                        partida: groups[selectedKey].partida,
+                        fecha: firebase.firestore.FieldValue.serverTimestamp(),
+                        piezas: selectedList,
+                        status: 'PENDIENTE'
+                    });
+
+                    // Dibujar Barcode
+                    JsBarcode("#barcode", kitId, { format: "CODE128", width: 2, height: 60, displayValue: true, fontSize: 14 });
+
+                    // Exportar
+                    const opt = {
+                        margin: 0,
+                        filename: `KIT-${groups[selectedKey].modelo}.pdf`,
+                        jsPDF: { unit: 'in', format: [4, 6], orientation: 'portrait' }
+                    };
+                    await html2pdf().set(opt).from(pdfRef.current).save();
+                    
+                    // Limpiar selección
+                    setCheckedPkgs({});
+                } catch (e) { console.error(e); alert("Error guardando kit"); }
+                setIsSaving(false);
+            };
+
             return (
-                <div className="h-screen flex flex-col items-center justify-center p-6 text-center bg-slate-950">
-                    <h1 className="text-3xl font-black text-amber-500 mb-8 tracking-tighter italic flex items-center gap-2">
-                        <Icon name="clipboard-check" size={32} /> CIRINEO <span className="text-white">PRE-TEÑIDO</span>
-                    </h1>
-                    
-                    <button onClick={() => setShow(true)} 
-                            className="w-full max-w-xs aspect-square bg-slate-900 border-4 border-amber-500 rounded-full flex flex-col items-center justify-center gap-4 shadow-[0_0_50px_rgba(245,158,11,0.3)] active:scale-95 transition-transform">
-                        <Icon name="camera" size={80} className="text-amber-400"/>
-                        <span className="font-bold text-xl uppercase tracking-widest text-white">Iniciar Susan</span>
-                    </button>
-                    
-                    {show && <ScannerModal onClose={() => setShow(false)} ordersCache={orders} />}
+                <div className="flex h-screen overflow-hidden text-slate-100">
+                    {/* SIDEBAR ESTILO DARK */}
+                    <div className="w-80 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0">
+                        <div className="p-6 bg-slate-900">
+                            <h1 className="text-2xl font-black text-yellow-500 italic flex items-center gap-2">
+                                <Icon name="box" size={28}/> KIT DB V5
+                            </h1>
+                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Gestor de Agrupación</p>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4 sidebar-scroll space-y-2">
+                            {Object.keys(groups).sort().map(k => (
+                                <div key={k} onClick={() => {setSelectedKey(k); setCheckedPkgs({});}}
+                                    className={`p-4 rounded-xl cursor-pointer transition-all border-l-4 
+                                    ${selectedKey === k ? 'bg-slate-800 border-yellow-500' : 'bg-slate-900 border-transparent hover:bg-slate-800'}`}>
+                                    <div className="font-bold text-lg">{groups[k].modelo}</div>
+                                    <div className="flex justify-between text-[10px] opacity-50 font-bold">
+                                        <span>{groups[k].cliente}</span>
+                                        <span>PART: {groups[k].partida}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* DASHBOARD PRINCIPAL */}
+                    <div className="flex-1 flex flex-col bg-slate-950">
+                        {selectedKey ? (
+                            <>
+                                <div className="p-8 flex justify-between items-start bg-slate-900/50 border-b border-slate-800">
+                                    <div>
+                                        <h2 className="text-6xl font-black text-white tracking-tighter italic">{groups[selectedKey].modelo}</h2>
+                                        <div className="flex gap-4 mt-2">
+                                            <span className="bg-yellow-500 text-black px-3 py-1 rounded-full text-xs font-black">PARTIDA {groups[selectedKey].partida}</span>
+                                            <span className="text-slate-400 font-bold flex items-center gap-1"><Icon name="package"/> {activePkgs.length} Paquetes disponibles</span>
+                                        </div>
+                                    </div>
+                                    <button onClick={handleSaveAndPrint} disabled={selectedList.length === 0 || isSaving}
+                                        className="bg-yellow-500 hover:bg-yellow-400 text-black font-black px-10 py-5 rounded-2xl shadow-[0_0_30px_rgba(234,179,8,0.3)] flex items-center gap-3 transition-all active:scale-95 disabled:opacity-10">
+                                        <Icon name="printer" size={24}/> {isSaving ? 'GUARDANDO...' : 'REGISTRAR E IMPRIMIR'}
+                                    </button>
+                                </div>
+
+                                <div className="flex-1 p-8 overflow-y-auto grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 content-start">
+                                    {activePkgs.map(p => (
+                                        <div key={p.codigoUnico} onClick={() => setCheckedPkgs(v => ({...v, [p.codigoUnico]: !v[p.codigoUnico]}))}
+                                            className={`p-5 rounded-2xl border-2 cursor-pointer transition-all flex flex-col justify-between h-32
+                                            ${checkedPkgs[p.codigoUnico] ? 'bg-white text-slate-900 border-yellow-500 scale-105 shadow-xl' : 'bg-slate-900 border-slate-800 hover:border-slate-600'}`}>
+                                            <div className="flex justify-between items-start">
+                                                <span className="text-3xl font-black txt-model">#{p.paqueteNum}</span>
+                                                <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${checkedPkgs[p.codigoUnico] ? 'bg-yellow-500 border-yellow-500' : 'border-slate-700'}`}>
+                                                    {checkedPkgs[p.codigoUnico] && <Icon name="check" size={14} className="text-black"/>}
+                                                </div>
+                                            </div>
+                                            <div className="flex justify-between items-end">
+                                                <span className="text-[10px] font-black uppercase opacity-60 w-2/3 truncate">{p.piezaNombre}</span>
+                                                <span className="text-2xl font-black text-yellow-500">{p.cantidad}</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </>
+                        ) : (
+                            <div className="flex-1 flex flex-col items-center justify-center opacity-10">
+                                <Icon name="layers" size={120}/>
+                                <h2 className="text-3xl font-black mt-4">SELECCIONA UN MODELO</h2>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* GENERADOR DE PDF (Ficha Técnica 4x6) */}
+                    <div style={{ position: 'absolute', left: '-9999px' }}>
+                        <div ref={pdfRef} className="kit-label-container">
+                            {/* CABECERA NEGRA */}
+                            <div className="h-[18%] bg-black text-white p-4 flex justify-between items-center border-b-4 border-yellow-400">
+                                <div className="flex flex-col">
+                                    <span className="text-[10px] text-yellow-400 font-black uppercase tracking-widest">MODELO</span>
+                                    <span className="txt-model text-5xl">{selectedKey && groups[selectedKey].modelo}</span>
+                                </div>
+                                <div className="flex flex-col items-end">
+                                    <span className="text-[10px] text-gray-400 font-bold">PARTIDA</span>
+                                    <span className="font-bold text-2xl">{selectedKey && groups[selectedKey].partida}</span>
+                                </div>
+                            </div>
+
+                            {/* CUERPO CENTRAL */}
+                            <div className="h-[62%] flex">
+                                {/* FOTO IZQUIERDA */}
+                                <div className="w-[42%] border-r-2 border-black p-2 flex flex-col">
+                                    <div className="flex-1 relative overflow-hidden">
+                                        <SmartImage modelo={selectedKey && groups[selectedKey].modelo} repos={repos} />
+                                    </div>
+                                    <div className="mt-2 text-[10px] text-center font-black bg-black text-white py-1">
+                                        KIT: {selectedList.length} PARTES
+                                    </div>
+                                </div>
+                                
+                                {/* TABLA DERECHA (CANTIDADES) */}
+                                <div className="w-[58%] p-3 flex flex-col">
+                                    <div className="text-[10px] font-black border-b-2 border-black pb-1 mb-2 flex justify-between">
+                                        <span>CONTENIDO DEL PAQUETE</span>
+                                        <span className="text-gray-400">{selectedKey && groups[selectedKey].cliente}</span>
+                                    </div>
+                                    <div className="flex-1 overflow-hidden">
+                                        <table className="kit-table">
+                                            <thead>
+                                                <tr>
+                                                    <th className="w-1/4">CANT.</th>
+                                                    <th className="w-1/2">PIEZA</th>
+                                                    <th className="text-right">#PQT</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {selectedList.map((p, i) => (
+                                                    <tr key={i}>
+                                                        <td><span className="txt-qty text-3xl">{p.cantidad}</span></td>
+                                                        <td className="text-[11px] font-bold leading-none uppercase">{p.piezaNombre}</td>
+                                                        <td className="text-right font-black">#{p.paqueteNum}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* FOOTER BARCODE */}
+                            <div className="h-[20%] border-t-4 border-black flex flex-col items-center justify-center p-2 bg-white">
+                                <svg id="barcode"></svg>
+                                <span className="text-[8px] font-mono text-gray-400 mt-1 uppercase tracking-tighter">ID: {lastKitId}</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             );
         };
