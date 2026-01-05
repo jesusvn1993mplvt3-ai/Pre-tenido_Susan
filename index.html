@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Escáner para el Personal Administrativo - Cirineo Pro</title>
+    <title>Auditoría Visual - Cirineo Pro</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
@@ -16,7 +16,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 
-    <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@700&family=Plus+Jakarta+Sans:wght@400;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@700&family=Plus+Jakarta+Sans:wght@400;700;800&family=Roboto+Condensed:wght@400;700&display=swap" rel="stylesheet">
 
     <style>
         body { 
@@ -26,29 +26,47 @@
             min-height: 100vh;
         }
         .glass { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
-        .txt-oswald { font-family: 'Oswald', sans-serif; }
         
-        /* Estilo de la Papeleta Original Reconstruida */
-        .papeleta-original {
+        /* --- ESTILOS DE LA PAPELETA (Importados de papeletas.html) --- */
+        .label-layout {
             width: 100%;
-            max-width: 400px;
+            height: 100%;
+            display: flex;
+            border: 1px solid #ddd;
+            padding: 0.25in;
+            box-sizing: border-box;
             background: white;
             color: black;
-            border-radius: 8px;
-            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
-            margin-bottom: -40px; /* Efecto una sobre otra */
-            transition: transform 0.3s ease;
-            position: relative;
-            overflow: hidden;
-            border: 1px solid #ddd;
+            font-family: 'Roboto Condensed', sans-serif;
+            page-break-inside: avoid;
         }
-        .papeleta-original:hover { transform: translateY(-20px) scale(1.02); z-index: 50; }
+
+        .col-img { width: 25%; display: flex; align-items: center; justify-content: center; border-right: 2px solid #000; padding-right: 5px; overflow: hidden; }
+        .col-img img { width: 100%; height: 100%; object-fit: contain; }
+        .col-data { width: 60%; display: flex; flex-direction: column; border-right: 2px solid #000; }
+        .col-barcode { width: 15%; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
+
+        .lbl-row { display: flex; border-bottom: 2px solid #000; width: 100%; }
+        .lbl-row:last-child { border-bottom: none; }
+        .lbl-col { border-right: 2px solid #000; padding: 2px 4px; display: flex; flex-direction: column; justify-content: center; overflow: hidden; }
+        .lbl-col:last-child { border-right: none; }
         
-        .papeleta-inner { padding: 15px; display: flex; flex-direction: column; }
-        .header-papeleta { background: black; color: white; padding: 10px; display: flex; justify-content: space-between; align-items: center; }
-        
-        .custom-scroll::-webkit-scrollbar { width: 6px; }
-        .custom-scroll::-webkit-scrollbar-thumb { background: #3b82f6; border-radius: 10px; }
+        .lbl-title { font-size: 10px; font-weight: 700; color: #555; text-transform: uppercase; line-height: 1; margin-bottom: 1px; }
+        .lbl-big { font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 32px; line-height: 0.9; color: #000; }
+        .lbl-medium { font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 20px; line-height: 1; color: #000; }
+        .lbl-std { font-size: 14px; font-weight: 700; color: #000; line-height: 1.1; }
+
+        /* Estilos PDF Container para Exportación Individual (6x4 pulgadas) */
+        .pdf-fixed-container {
+            width: 6in;
+            height: 4in;
+            background: white;
+            margin: 0;
+            overflow: hidden;
+            position: relative;
+            box-sizing: border-box;
+            display: flex;
+        }
     </style>
 </head>
 <body>
@@ -67,16 +85,158 @@
             return <span ref={r} className={`inline-flex items-center justify-center ${className}`}/>;
         };
 
+        // --- COMPONENTE VISUAL DE LA PAPELETA ---
+        const ProductionLabel = ({ labelData }) => {
+            const svgRef = useRef(null);
+            const order = labelData; 
+            
+            const subPiece = order.subPiecesData ? order.subPiecesData.find(sp => sp.pieza === order.piezaNombre) : (order.subPiecesData?.[0] || {});
+            
+            // Barcode
+            const barcodeValue = order.packageCode || order.kitId;
+
+            // Cálculos
+            const tiempo = parseFloat(subPiece?.tiempo);
+            const hours = 12; 
+            const pzas1hr = tiempo > 0 ? Math.round(60 / tiempo) : '-'; 
+            const pzasShift = tiempo > 0 ? Math.round((hours * 60) / tiempo) : '-'; 
+
+            // Limpieza nombre
+            const rawPieza = order.piezaNombre || 'ESTANDAR';
+            const piezaVisual = rawPieza.split(' ')[0]; 
+
+            // Tamaño fuente dinamico
+            let piezaFontSize = '28px';
+            if (piezaVisual.length <= 6) piezaFontSize = '64px';
+            else if (piezaVisual.length <= 10) piezaFontSize = '52px';
+            else piezaFontSize = '38px';
+
+            const getImageUrl = (modelo) => `https://raw.githubusercontent.com/sweaters-liliana/MAES2O26/refs/heads/main/IMAGENES/${modelo}.png`;
+
+            useEffect(() => {
+                if (svgRef.current && barcodeValue) {
+                    try {
+                        JsBarcode(svgRef.current, barcodeValue, { 
+                            format: "CODE128", lineColor: "#000", width: 1.6, height: 55, displayValue: false, margin: 3
+                        });
+                    } catch (e) { console.error("Error barcode", e); }
+                }
+            }, [barcodeValue]);
+
+            return (
+                <div className="label-layout">
+                    {/* ZONA 1: IMAGEN */}
+                    <div className="col-img">
+                        <img 
+                            src={getImageUrl(order.modelo)} 
+                            onError={(e) => { e.target.onerror = null; e.target.style.display='none'; }} 
+                            alt={order.modelo}
+                        />
+                    </div>
+
+                    {/* ZONA 2: DATOS */}
+                    <div className="col-data">
+                        <div className="lbl-row" style={{height: '17%'}}>
+                            <div className="lbl-col" style={{width: '65%'}}>
+                                <div className="lbl-title">MODELO</div>
+                                <div className="lbl-big">{order.modelo}</div>
+                            </div>
+                            <div className="lbl-col" style={{width: '35%'}}>
+                                <div className="lbl-title">TOTAL PEDIDO</div>
+                                <div className="lbl-medium">{order.totalPedido || '---'}</div>
+                            </div>
+                        </div>
+                        
+                        <div className="lbl-row" style={{height: '13%'}}>
+                            <div className="lbl-col" style={{width: '70%'}}>
+                                <div className="lbl-title">CLIENTE</div>
+                                <div className="lbl-std truncate">{order.cliente}</div>
+                            </div>
+                            <div className="lbl-col" style={{width: '30%'}}>
+                                <div className="lbl-title">PARTIDA</div>
+                                <div className="lbl-std">{order.partida}</div>
+                            </div>
+                        </div>
+
+                        {/* PIEZA */}
+                        <div className="lbl-row" style={{height: '24%', backgroundColor: '#000', color: '#FFF'}}>
+                            <div className="lbl-col" style={{width: '100%', border: 'none', alignItems: 'center', justifyContent: 'center', padding: '0', display: 'flex'}}>
+                                <span style={{fontFamily: "'Oswald', sans-serif", fontWeight: '700', fontSize: piezaFontSize, lineHeight: '1', textAlign: 'center', width: '100%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>
+                                    {piezaVisual}
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* Cantidades y Maquina */}
+                        <div className="lbl-row" style={{height: '24%'}}>
+                            <div className="lbl-col" style={{width: '33%', textAlign: 'center'}}>
+                                <div className="lbl-title">PAQUETE</div>
+                                <div className="lbl-big" style={{fontSize: '36px'}}>{order.paqueteNum}</div>
+                            </div>
+                            <div className="lbl-col" style={{width: '34%', backgroundColor: '#eee', textAlign: 'center'}}>
+                                <div className="lbl-title">CANTIDAD</div>
+                                <div className="lbl-big" style={{fontSize: '36px'}}>{order.cantidad}</div>
+                            </div>
+                            <div className="lbl-col" style={{width: '33%', textAlign: 'center', backgroundColor: '#000', color: '#fff'}}>
+                                <div className="lbl-title" style={{color: '#ccc'}}>MAQUINA</div>
+                                <div className="lbl-big" style={{fontSize: '48px', color: '#fff'}}>{order.maquina || '0'}</div>
+                            </div>
+                        </div>
+
+                        {/* Specs */}
+                        <div className="lbl-row" style={{height: '11%'}}>
+                            <div className="lbl-col" style={{width: '25%'}}>
+                                <div className="lbl-title" style={{fontSize:'9px'}}>TALLA</div>
+                                <div className="lbl-medium" style={{fontSize:'16px'}}>{subPiece?.talla || 'U'}</div>
+                            </div>
+                            <div className="lbl-col" style={{width: '25%'}}>
+                                <div className="lbl-title" style={{fontSize:'9px'}}>PESO(g)</div>
+                                <div className="lbl-std" style={{fontSize:'14px'}}>{subPiece?.peso || '-'}</div>
+                            </div>
+                            <div className="lbl-col" style={{width: '25%'}}>
+                                <div className="lbl-title" style={{fontSize:'9px'}}>PZS/HR</div>
+                                <div className="lbl-std" style={{fontSize:'16px'}}>{pzas1hr}</div>
+                            </div>
+                             <div className="lbl-col" style={{width: '25%'}}>
+                                <div className="lbl-title" style={{fontSize:'9px'}}>12 HRS</div>
+                                <div className="lbl-std" style={{fontSize:'16px'}}>{pzasShift}</div>
+                            </div>
+                        </div>
+
+                        {/* Footer */}
+                        <div className="lbl-row" style={{flexGrow: 1, borderBottom: 'none', alignItems: 'center'}}>
+                            <div style={{fontSize: '9px', width: '100%', textAlign: 'center', fontWeight: 'bold'}}>
+                                AUDITORIA ID: {order.kitId}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* ZONA 3: BARCODE */}
+                    <div className="col-barcode">
+                        <div style={{transform: 'rotate(90deg)', transformOrigin: 'center', width: '3.5in', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'}}>
+                             <svg ref={svgRef} style={{width: '100%', height: 'auto'}}></svg>
+                             <div style={{fontSize: '10px', fontFamily: 'monospace', marginTop: '5px'}}>{barcodeValue}</div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
         const App = () => {
-            const [scannedKit, setScannedKit] = useState(null);
+            const [scannedKitData, setScannedKitData] = useState(null);
+            const [mergedLabels, setMergedLabels] = useState([]);
+            
             const [isScanning, setIsScanning] = useState(false);
             const [loading, setLoading] = useState(false);
             const scannerRef = useRef(null);
-            const pdfExportRef = useRef();
+            
+            // Estado para controlar qué botón está "cargando" (generando PDF)
+            const [downloadingId, setDownloadingId] = useState(null);
 
             const startScanner = () => {
                 setIsScanning(true);
-                setScannedKit(null);
+                setScannedKitData(null);
+                setMergedLabels([]);
                 setTimeout(() => {
                     const html5QrCode = new Html5Qrcode("reader");
                     scannerRef.current = html5QrCode;
@@ -100,44 +260,84 @@
             const lookupKit = async (kitId) => {
                 setLoading(true);
                 try {
-                    const doc = await db.collection('kits_produccion').doc(kitId).get();
-                    if (doc.exists) {
-                        setScannedKit(doc.data());
+                    const kitDoc = await db.collection('kits_produccion').doc(kitId).get();
+                    if (kitDoc.exists) {
+                        const kitData = kitDoc.data();
+                        setScannedKitData(kitData);
+
+                        let masterOrder = {};
+                        try {
+                            const orderSnap = await db.collection('orders')
+                                .where('codigo', '==', kitData.modelo)
+                                .limit(1)
+                                .get();
+                            if (!orderSnap.empty) masterOrder = orderSnap.docs[0].data();
+                        } catch (err) { console.warn("Error orden maestra", err); }
+
+                        const labels = kitData.piezas.map((piezaDelKit, index) => ({
+                            kitId: kitData.kitId,
+                            modelo: kitData.modelo,
+                            cliente: kitData.cliente,
+                            partida: kitData.partida,
+                            fechaKit: kitData.fecha,
+                            paqueteNum: piezaDelKit.paqueteNum,
+                            cantidad: piezaDelKit.cantidad,
+                            piezaNombre: piezaDelKit.piezaNombre,
+                            maquina: piezaDelKit.maquina,
+                            packageCode: piezaDelKit.codigoUnico || `${kitData.kitId}-${index}`,
+                            totalPedido: masterOrder.totalPedido,
+                            subPiecesData: masterOrder.subPiecesData,
+                        }));
+                        setMergedLabels(labels);
                     } else {
-                        alert("Código no encontrado en la base de datos administrativa.");
+                        alert("Código no encontrado.");
                     }
-                } catch (e) { console.error(e); }
+                } catch (e) { console.error(e); alert("Error de conexión"); }
                 setLoading(false);
             };
 
-            const generatePDF = () => {
-                const opt = { 
-                    margin: 0.5, 
-                    filename: `AUDITORIA_${scannedKit.kitId}.pdf`,
-                    html2canvas: { 
-                        scale: 2,
-                        useCORS: true, // IMPORTANTE: Permite cargar imágenes de dominios externos (GitHub)
-                        logging: true
-                    },
-                    jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
-                };
-                html2pdf().set(opt).from(pdfExportRef.current).save();
+            // FUNCIÓN PARA DESCARGAR UNA SOLA PAPELETA
+            const downloadSinglePDF = (index, labelData) => {
+                setDownloadingId(index);
+                // Usamos un pequeño timeout para que React actualice el estado del loading
+                setTimeout(() => {
+                    const element = document.getElementById(`pdf-hidden-${index}`);
+                    if(!element) {
+                        alert("Error al generar PDF");
+                        setDownloadingId(null);
+                        return;
+                    }
+
+                    const opt = { 
+                        margin: 0, 
+                        filename: `Papeleta_${labelData.packageCode}.pdf`,
+                        image: { type: 'jpeg', quality: 0.98 },
+                        html2canvas: { 
+                            scale: 2,
+                            useCORS: true,
+                            logging: false
+                        },
+                        // CONFIGURACIÓN 6x4 PULGADAS (Tamaño Etiqueta Térmica)
+                        jsPDF: { unit: 'in', format: [6, 4], orientation: 'landscape' }
+                    };
+
+                    html2pdf().set(opt).from(element).save().then(() => {
+                        setDownloadingId(null);
+                    });
+                }, 100);
             };
 
-            // URL base de las imágenes
-            const getImageUrl = (modelo) => `https://raw.githubusercontent.com/sweaters-liliana/MAES2O26/refs/heads/main/IMAGENES/${modelo}.png`;
-
             return (
-                <div className="max-w-4xl mx-auto p-6 flex flex-col min-h-screen">
-                    {/* HEADER PRO */}
-                    <div className="flex justify-between items-center mb-8 glass p-6 rounded-3xl">
+                <div className="max-w-6xl mx-auto p-4 flex flex-col min-h-screen">
+                    {/* HEADER */}
+                    <div className="flex flex-col md:flex-row justify-between items-center mb-6 glass p-6 rounded-3xl gap-4">
                         <div>
-                            <h1 className="text-2xl font-black tracking-tighter text-blue-400">CIRINEO AUDIT</h1>
-                            <p className="text-[10px] font-bold opacity-50 uppercase tracking-[0.3em]">Escáner para el Personal Administrativo</p>
+                            <h1 className="text-2xl font-black tracking-tighter text-blue-400">CIRINEO AUDIT V2</h1>
+                            <p className="text-[10px] font-bold opacity-50 uppercase tracking-[0.3em]">Visualizador de Integridad de Kits</p>
                         </div>
                         <div className="flex gap-4">
                             {!isScanning && (
-                                <button onClick={startScanner} className="bg-blue-600 hover:bg-blue-500 px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-lg shadow-blue-900/20">
+                                <button onClick={startScanner} className="bg-blue-600 hover:bg-blue-500 px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-lg shadow-blue-900/20 text-sm">
                                     <Icon name="camera" /> ESCANEAR KIT
                                 </button>
                             )}
@@ -152,171 +352,75 @@
                         </div>
                     )}
 
-                    {/* RESULTADOS */}
-                    {loading && <div className="flex-1 flex items-center justify-center font-bold animate-pulse">Consultando base de datos...</div>}
+                    {/* LOADING */}
+                    {loading && <div className="flex-1 flex items-center justify-center font-bold animate-pulse">Analizando estructura del Kit...</div>}
 
-                    {scannedKit && (
-                        <div className="flex-1 flex flex-col lg:flex-row gap-8 animate-in fade-in duration-500">
-                            {/* PANEL DE INFORMACIÓN */}
-                            <div className="lg:w-1/3 flex flex-col gap-4">
-                                <div className="glass p-6 rounded-3xl">
-                                    <h3 className="text-xs font-bold opacity-40 uppercase mb-4">Detalles del Grupo</h3>
-                                    
-                                    {/* Imagen en el UI principal también */}
-                                    <div className="mb-6 p-4 bg-white/5 rounded-xl flex justify-center">
-                                        <img 
-                                            src={getImageUrl(scannedKit.modelo)} 
-                                            className="h-32 object-contain" 
-                                            onError={(e)=>e.target.style.display='none'}
-                                        />
-                                    </div>
-
-                                    <div className="space-y-4">
-                                        <div><p className="text-[10px] font-black opacity-40">ID RASTREO</p><p className="text-2xl font-black text-blue-400">{scannedKit.kitId}</p></div>
-                                        <div><p className="text-[10px] font-black opacity-40">MODELO / CLIENTE</p><p className="text-xl font-bold">{scannedKit.modelo} — {scannedKit.cliente}</p></div>
-                                        <div><p className="text-[10px] font-black opacity-40">PARTIDA</p><p className="text-xl font-bold">{scannedKit.partida}</p></div>
-                                        <div><p className="text-[10px] font-black opacity-40">PAQUETES</p><p className="text-xl font-bold">{scannedKit.piezas.length} Piezas agrupadas</p></div>
-                                    </div>
-                                    <button onClick={generatePDF} className="w-full mt-8 bg-green-600 hover:bg-green-500 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl shadow-green-900/20 transition-transform active:scale-95">
-                                        <Icon name="file-text" /> GENERAR PDF DE AUDITORÍA
-                                    </button>
+                    {/* RESULTADOS VISUALES */}
+                    {scannedKitData && mergedLabels.length > 0 && (
+                        <div className="flex-1 animate-in fade-in duration-500">
+                            
+                            <div className="flex justify-between items-end mb-4">
+                                <div>
+                                    <h2 className="text-xl font-bold">Contenido del Kit: {scannedKitData.kitId}</h2>
+                                    <p className="text-sm opacity-60">Se encontraron {mergedLabels.length} paquetes agrupados.</p>
                                 </div>
+                                {/* BOTÓN GLOBAL ELIMINADO SEGÚN SOLICITUD */}
                             </div>
 
-                            {/* VISUALIZACIÓN DE PAPELETAS (Efecto "Stack") */}
-                            <div className="flex-1 flex flex-col items-center custom-scroll overflow-y-auto max-h-[70vh] pb-20 pt-10 px-4">
-                                <h3 className="text-xs font-black opacity-30 uppercase mb-10 tracking-widest">Papeletas Originales Detectadas</h3>
-                                {scannedKit.piezas.map((p, idx) => (
-                                    <div key={idx} className="papeleta-original">
-                                        <div className="header-papeleta">
-                                            <span className="text-[10px] font-black uppercase tracking-widest">Audit Ref: {scannedKit.kitId}</span>
-                                            <span className="bg-white text-black px-2 py-0.5 rounded text-[10px] font-bold">PQT #{p.paqueteNum}</span>
-                                        </div>
-                                        <div className="p-4 flex gap-4 items-center">
-                                            <div className="w-1/3 h-24 bg-slate-50 flex items-center justify-center rounded">
-                                                <img 
-                                                    src={getImageUrl(scannedKit.modelo)} 
-                                                    className="max-h-full object-contain" 
-                                                    onError={(e)=>e.target.src="https://via.placeholder.com/100?text=IMG"} 
-                                                />
+                            {/* GRID DE PAPELETAS EN PANTALLA */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pb-20">
+                                {mergedLabels.map((labelData, idx) => (
+                                    <div key={idx} className="flex flex-col gap-2">
+                                        <div className="relative group">
+                                            <div className="absolute -top-3 left-4 bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold z-10 shadow-md">
+                                                #{idx + 1}
                                             </div>
-                                            <div className="flex-1">
-                                                <div className="text-4xl txt-oswald font-black leading-none">{p.cantidad}</div>
-                                                <div className="text-sm font-black uppercase">{p.piezaNombre}</div>
-                                                <div className="text-[10px] font-bold border-t border-slate-200 mt-1 pt-1 opacity-60">MAQUINA: {p.maquina || 'NO ASIG.'}</div>
+                                            <div className="h-64 w-full overflow-hidden rounded-t-lg shadow-2xl border border-slate-600 bg-white">
+                                                {/* Previsualización escalada */}
+                                                <div style={{ width: '100%', height: '100%', transform: 'scale(0.8)', transformOrigin: 'top left', width: '125%', height: '125%' }}>
+                                                     <ProductionLabel labelData={labelData} />
+                                                </div>
                                             </div>
                                         </div>
+                                        
+                                        {/* BOTÓN INDIVIDUAL DE DESCARGA */}
+                                        <button 
+                                            onClick={() => downloadSinglePDF(idx, labelData)}
+                                            disabled={downloadingId !== null}
+                                            className={`w-full py-3 rounded-b-lg font-bold flex items-center justify-center gap-2 text-sm transition-colors shadow-lg
+                                                ${downloadingId === idx 
+                                                    ? 'bg-slate-600 text-slate-300 cursor-wait' 
+                                                    : 'bg-slate-700 hover:bg-green-600 text-white'}`}
+                                        >
+                                            {downloadingId === idx ? (
+                                                <>GENERANDO...</>
+                                            ) : (
+                                                <><Icon name="download" size={16}/> DESCARGAR PAPELETAS #{labelData.paqueteNum}</>
+                                            )}
+                                        </button>
                                     </div>
                                 ))}
                             </div>
                         </div>
                     )}
 
-                    {!scannedKit && !loading && !isScanning && (
-                        <div className="flex-1 flex flex-col items-center justify-center text-slate-600 border-2 border-dashed border-slate-800 rounded-[40px]">
+                    {!scannedKitData && !loading && !isScanning && (
+                        <div className="flex-1 flex flex-col items-center justify-center text-slate-600 border-2 border-dashed border-slate-800 rounded-[40px] m-4">
                             <Icon name="qr-code" size={80} className="opacity-20 mb-4" />
-                            <p className="font-bold text-center px-10">Inicie el escáner para verificar la integridad de un Kit de producción.</p>
+                            <p className="font-bold text-center px-10">Inicie el escáner para descomponer un Kit.</p>
                         </div>
                     )}
 
-                    {/* PDF HIDDEN CONTENT */}
-                    <div style={{ position: 'absolute', left: '-9999px' }}>
-                        <div ref={pdfExportRef} className="p-10 text-black bg-white">
-                            {/* PDF HEADER CON IMAGEN */}
-                            <div className="border-b-4 border-black pb-6 mb-8 flex justify-between items-start">
-                                <div className="flex-1">
-                                    <h1 className="text-4xl font-black uppercase mb-2">Reporte de Auditoría</h1>
-                                    <p className="text-sm font-bold opacity-60 uppercase tracking-widest mb-6">Sistema Administrativo Cirineo</p>
-                                    
-                                    <div className="flex gap-8">
-                                        <div>
-                                            <p className="text-[10px] font-bold uppercase opacity-50">Kit ID</p>
-                                            <p className="text-2xl font-black">{scannedKit?.kitId}</p>
-                                        </div>
-                                        <div>
-                                            <p className="text-[10px] font-bold uppercase opacity-50">Fecha de Validación</p>
-                                            <p className="text-xl font-bold">{new Date().toLocaleDateString()}</p>
-                                        </div>
-                                    </div>
-                                </div>
-                                
-                                {/* RECUADRO DE FOTO DEL MODELO EN PDF */}
-                                <div className="w-40 h-40 border-2 border-slate-200 p-2 rounded flex items-center justify-center bg-slate-50">
-                                    {scannedKit && (
-                                        <img 
-                                            src={getImageUrl(scannedKit.modelo)}
-                                            alt="Modelo Referencia"
-                                            className="max-w-full max-h-full object-contain mix-blend-multiply"
-                                            crossOrigin="anonymous"
-                                        />
-                                    )}
-                                </div>
+                    {/* ÁREA OCULTA PARA GENERACIÓN DE PDFS (RENDERING INVISIBLE) */}
+                    <div style={{ position: 'absolute', left: '-9999px', top: 0 }}>
+                        {mergedLabels.map((labelData, idx) => (
+                            // CADA PAPELETA TIENE SU PROPIO CONTENEDOR CON ID ÚNICO
+                            <div key={idx} id={`pdf-hidden-${idx}`} className="pdf-fixed-container">
+                                <ProductionLabel labelData={labelData} />
                             </div>
-
-                            {/* INFORMACIÓN PRINCIPAL */}
-                            <div className="bg-slate-100 p-6 rounded-lg mb-8">
-                                <h3 className="text-xs font-black uppercase mb-4 border-b border-slate-300 pb-2">Especificaciones de Producción</h3>
-                                <div className="grid grid-cols-2 gap-y-6 gap-x-8">
-                                    <div>
-                                        <p className="text-[10px] font-black uppercase opacity-40">Modelo Asignado</p>
-                                        <p className="text-xl font-bold uppercase text-blue-900">{scannedKit?.modelo}</p>
-                                    </div>
-                                    <div>
-                                        <p className="text-[10px] font-black uppercase opacity-40">Cliente</p>
-                                        <p className="text-xl font-bold uppercase">{scannedKit?.cliente}</p>
-                                    </div>
-                                    <div>
-                                        <p className="text-[10px] font-black uppercase opacity-40">Partida</p>
-                                        <p className="text-xl font-bold uppercase">{scannedKit?.partida}</p>
-                                    </div>
-                                    <div>
-                                        <p className="text-[10px] font-black uppercase opacity-40">Fecha Creación Kit</p>
-                                        <p className="text-lg font-bold uppercase">{scannedKit?.fecha?.toDate().toLocaleString() || 'N/A'}</p>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <h2 className="text-lg font-black mb-4 flex items-center gap-2">
-                                <span>Desglose de Contenido</span>
-                                <span className="bg-black text-white text-[10px] px-2 py-1 rounded-full">{scannedKit?.piezas.length} PAQUETES</span>
-                            </h2>
-                            
-                            <table className="w-full text-left border-collapse">
-                                <thead className="bg-black text-white">
-                                    <tr className="text-[10px] font-black uppercase">
-                                        <th className="p-3 rounded-tl-lg"># PQT</th>
-                                        <th className="p-3">Cant.</th>
-                                        <th className="p-3">Pieza / Componente</th>
-                                        <th className="p-3">Máquina</th>
-                                        <th className="p-3 rounded-tr-lg">Validación</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {scannedKit?.piezas.map((p, i) => (
-                                        <tr key={i} className="border-b border-slate-200 text-xs hover:bg-slate-50">
-                                            <td className="p-3 font-bold text-slate-500">#{p.paqueteNum}</td>
-                                            <td className="p-3 text-lg font-black">{p.cantidad}</td>
-                                            <td className="p-3 font-bold uppercase">{p.piezaNombre}</td>
-                                            <td className="p-3 font-mono text-slate-600">{p.maquina || '---'}</td>
-                                            <td className="p-3">
-                                                <div className="w-4 h-4 border-2 border-slate-300 rounded-sm"></div>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                            
-                            <div className="mt-12 flex justify-between items-end">
-                                <div className="text-[10px] max-w-xs opacity-50">
-                                    Este documento es un comprobante administrativo generado automáticamente por CIRINEO PRO. Verifique la integridad física de los paquetes contra este listado.
-                                </div>
-                                <div className="text-center">
-                                    <div className="h-16 w-40 border-b border-black mb-2"></div>
-                                    <p className="text-[10px] font-bold uppercase">Firma de Auditoría</p>
-                                </div>
-                            </div>
-                        </div>
+                        ))}
                     </div>
+
                 </div>
             );
         };
