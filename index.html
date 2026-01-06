@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Consolidador Viry Edition + Chat</title>
+    <title>Consolidador Viry Edition - Cirineo</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
@@ -20,13 +20,16 @@
     <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;600;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
 
     <style>
-        body { background: linear-gradient(135deg, #fdf2f8 0%, #fff1f2 100%); color: #4a044e; font-family: 'Quicksand', sans-serif; overflow: hidden; }
-        .glass-panel { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.5); }
-        .chat-bubble-viry { background: #fce7f3; border-radius: 20px 20px 4px 20px; color: #831843; }
-        .chat-bubble-other { background: #f1f5f9; border-radius: 20px 20px 20px 4px; color: #1e293b; }
-        ::-webkit-scrollbar { width: 4px; }
-        ::-webkit-scrollbar-thumb { background: #fbcfe8; border-radius: 10px; }
+        body { background: linear-gradient(135deg, #fdf2f8 0%, #fff1f2 100%); color: #4a044e; font-family: 'Quicksand', sans-serif; overflow: hidden; height: 100vh; }
+        .glass-panel { background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.5); }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .chat-bubble-viry { background: #fce7f3; border-radius: 18px 18px 4px 18px; color: #831843; }
+        .chat-bubble-other { background: #f1f5f9; border-radius: 18px 18px 18px 4px; color: #1e293b; }
+        .machine-col { min-width: 320px; max-width: 320px; transition: all 0.3s ease; }
+        
+        /* Animación para que las tarjetas entren suave */
+        .card-enter { animation: slideUp 0.3s ease-out; }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     </style>
 </head>
 <body>
@@ -48,19 +51,35 @@
         const db = firebase.firestore();
         const storage = firebase.storage();
 
-        const DEFAULT_STATIONS = [
-            { name: "La Mejor FM", url: "https://playerservices.streamtheworld.com/api/livestream-redirect/XHOC_FMAAC.aac" },
-            { name: "Exa FM", url: "https://playerservices.streamtheworld.com/api/livestream-redirect/XHEXA_FMAAC.aac" },
-            { name: "Los 40", url: "https://playerservices.streamtheworld.com/api/livestream-redirect/LOS40_MEXICO_SC" }
-        ];
-
         const Icon = ({ name, size = 18, className="" }) => {
             const r = useRef(null);
             useEffect(() => { if (r.current && lucide.icons[name]) r.current.innerHTML = lucide.icons[name].toSvg({ width: size, height: size }); }, [name, size]);
             return <span ref={r} className={`inline-flex items-center justify-center ${className}`}/>;
         };
 
-        // --- COMPONENTE CHAT CON IMÁGENES ---
+        // --- SUB-COMPONENTE: TARJETA DE PAQUETE ---
+        const ScanCard = ({ scan, onApprove, onDelete, processing }) => (
+            <div className="bg-white rounded-2xl p-4 shadow-sm border border-pink-100 card-enter group">
+                <div className="flex justify-between items-start mb-2">
+                    <span className="text-[10px] font-bold text-pink-400 uppercase">{scan.codigo_paquete}</span>
+                    <span className="text-[10px] text-gray-400">{scan.fecha_scan?.substring(11,16)}</span>
+                </div>
+                <h4 className="font-bold text-gray-800 leading-tight">{scan.modelo}</h4>
+                <p className="text-[11px] text-gray-500 mb-3 italic">{scan.partida}</p>
+                
+                <div className="flex justify-between items-center bg-pink-50 rounded-xl p-2 mb-3">
+                    <div className="text-[10px] font-bold text-pink-700">Pqt. {scan.paquete_indice}</div>
+                    <div className="text-[10px] text-pink-600 flex items-center gap-1"><Icon name="user" size={10}/> {scan.tejedor}</div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={() => onDelete(scan.id)} className="py-2 rounded-lg bg-red-50 text-red-500 text-[10px] font-bold">BORRAR</button>
+                    <button onClick={() => onApprove(scan)} className="py-2 rounded-lg bg-green-500 text-white text-[10px] font-bold">APROBAR</button>
+                </div>
+            </div>
+        );
+
+        // --- COMPONENTE CHAT ---
         const ChatPanel = ({ isOpen, onClose }) => {
             const [messages, setMessages] = useState([]);
             const [text, setText] = useState("");
@@ -68,7 +87,7 @@
             const scrollRef = useRef();
 
             useEffect(() => {
-                const unsub = db.collection('chat_produccion').orderBy('timestamp', 'asc').limitToLast(50)
+                const unsub = db.collection('chat_produccion').orderBy('timestamp', 'asc').limitToLast(30)
                     .onSnapshot(snap => {
                         setMessages(snap.docs.map(d => ({id: d.id, ...d.data()})));
                         setTimeout(() => scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight), 100);
@@ -76,150 +95,166 @@
                 return () => unsub();
             }, []);
 
-            const sendMessage = async (e, imgUrl = null) => {
-                if (e) e.preventDefault();
-                if (!text.trim() && !imgUrl) return;
-                
-                const msg = {
-                    sender: "Viry",
-                    text: text,
-                    image: imgUrl,
-                    timestamp: firebase.firestore.FieldValue.serverTimestamp()
-                };
+            const sendMsg = async (e, img = null) => {
+                if(e) e.preventDefault();
+                if(!text.trim() && !img) return;
+                await db.collection('chat_produccion').add({
+                    sender: "Viry", text, image: img, timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                });
                 setText("");
-                await db.collection('chat_produccion').add(msg);
             };
 
-            const handleImage = async (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
+            const handleFile = async (e) => {
+                const f = e.target.files[0];
+                if(!f) return;
                 setUploading(true);
-                try {
-                    const ref = storage.ref(`chat/${Date.now()}_${file.name}`);
-                    await ref.put(file);
-                    const url = await ref.getDownloadURL();
-                    await sendMessage(null, url);
-                } catch (err) { alert("Error al subir imagen"); }
+                const ref = storage.ref(`chat/${Date.now()}_${f.name}`);
+                await ref.put(f);
+                const url = await ref.getDownloadURL();
+                await sendMsg(null, url);
                 setUploading(false);
             };
 
-            if (!isOpen) return null;
-
+            if(!isOpen) return null;
             return (
-                <div className="fixed inset-y-0 right-0 w-80 bg-white shadow-2xl z-[80] flex flex-col border-l border-pink-100 animate-in slide-in-from-right">
-                    <div className="p-4 bg-pink-500 text-white flex justify-between items-center">
-                        <span className="font-bold flex items-center gap-2"><Icon name="message-circle"/> Chat de Viry</span>
+                <div className="fixed inset-y-0 right-0 w-80 bg-white shadow-2xl z-[100] flex flex-col border-l border-pink-200 animate-in slide-in-from-right">
+                    <div className="p-4 bg-gradient-to-r from-pink-500 to-rose-400 text-white flex justify-between items-center">
+                        <span className="font-bold flex items-center gap-2"><Icon name="message-circle"/> Chat Viry</span>
                         <button onClick={onClose}><Icon name="x"/></button>
                     </div>
-                    
-                    <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#fff9fb]">
+                    <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 bg-pink-50/30">
                         {messages.map(m => (
                             <div key={m.id} className={`flex flex-col ${m.sender === 'Viry' ? 'items-end' : 'items-start'}`}>
-                                <span className="text-[10px] text-gray-400 mb-1">{m.sender}</span>
                                 <div className={`p-3 max-w-[90%] shadow-sm ${m.sender === 'Viry' ? 'chat-bubble-viry' : 'chat-bubble-other'}`}>
-                                    {m.image && <img src={m.image} className="rounded-lg mb-2 max-w-full border border-pink-200" alt="foto" />}
-                                    {m.text && <p className="text-sm">{m.text}</p>}
+                                    {m.image && <img src={m.image} className="rounded-lg mb-2" />}
+                                    <p className="text-xs">{m.text}</p>
                                 </div>
                             </div>
                         ))}
                     </div>
-
-                    <form onSubmit={sendMessage} className="p-3 bg-white border-t border-pink-50 flex items-center gap-2">
-                        <label className="cursor-pointer p-2 text-pink-400 hover:bg-pink-50 rounded-full transition">
-                            <Icon name={uploading ? "loader-2" : "camera"} className={uploading ? "animate-spin" : ""}/>
-                            <input type="file" accept="image/*" className="hidden" onChange={handleImage} disabled={uploading}/>
-                        </label>
-                        <input value={text} onChange={e => setText(e.target.value)} placeholder="Escribe algo..." className="flex-1 bg-gray-100 rounded-full px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-300"/>
-                        <button type="submit" className="bg-pink-500 text-white p-2 rounded-full"><Icon name="send" size={16}/></button>
+                    <form onSubmit={sendMsg} className="p-3 border-t flex gap-2 items-center bg-white">
+                        <label className="cursor-pointer text-pink-400 p-2"><Icon name={uploading ? "loader-2" : "camera"} className={uploading ? "animate-spin" : ""}/><input type="file" className="hidden" onChange={handleFile}/></label>
+                        <input value={text} onChange={e=>setText(e.target.value)} className="flex-1 bg-gray-100 rounded-full px-4 py-2 text-xs" placeholder="Escribe..." />
+                        <button className="bg-pink-500 text-white p-2 rounded-full"><Icon name="send" size={14}/></button>
                     </form>
-                </div>
-            );
-        };
-
-        // --- COMPONENTE RADIO ---
-        const RadioPlayer = () => {
-            const [currentStation, setCurrentStation] = useState(null);
-            const [isPlaying, setIsPlaying] = useState(false);
-            const audioRef = useRef(null);
-            const hlsRef = useRef(null);
-
-            const playStream = (url) => {
-                const audio = audioRef.current;
-                if (hlsRef.current) hlsRef.current.destroy();
-                if (Hls.isSupported() && !url.includes('.mp3')) {
-                    const hls = new Hls();
-                    hlsRef.current = hls;
-                    hls.loadSource(url);
-                    hls.attachMedia(audio);
-                    hls.on(Hls.Events.MANIFEST_PARSED, () => audio.play());
-                } else {
-                    audio.src = url;
-                    audio.play();
-                }
-            };
-
-            const togglePlay = (st) => {
-                if (currentStation?.name === st.name && isPlaying) {
-                    audioRef.current.pause();
-                    setIsPlaying(false);
-                } else {
-                    setCurrentStation(st);
-                    setIsPlaying(true);
-                    playStream(st.url);
-                }
-            };
-
-            return (
-                <div className="fixed bottom-0 left-0 right-0 h-16 glass-panel z-50 flex items-center px-4 gap-4">
-                    <audio ref={audioRef} />
-                    <div className="flex items-center gap-2 min-w-[120px]">
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white ${isPlaying ? 'bg-pink-500 animate-pulse' : 'bg-gray-300'}`}>
-                            <Icon name="music" size={16}/>
-                        </div>
-                        <div className="text-[10px] font-bold truncate">{currentStation?.name || 'RADIO'}</div>
-                    </div>
-                    <div className="flex-1 flex gap-2 overflow-x-auto scrollbar-hide">
-                        {DEFAULT_STATIONS.map(st => (
-                            <button key={st.name} onClick={() => togglePlay(st)} className={`px-3 py-1 rounded-full text-[10px] font-bold whitespace-nowrap border ${currentStation?.name === st.name ? 'bg-pink-500 text-white' : 'bg-white text-pink-500'}`}>{st.name}</button>
-                        ))}
-                    </div>
                 </div>
             );
         };
 
         // --- APP PRINCIPAL ---
         const App = () => {
-            const [isScanning, setIsScanning] = useState(false);
+            const [scannedItems, setScannedItems] = useState([]);
+            const [orders, setOrders] = useState([]);
+            const [approvedIds, setApprovedIds] = useState(new Set());
             const [chatOpen, setChatOpen] = useState(false);
-            // ... (Resto de la lógica de Firebase del Consolidador anterior se mantiene igual)
+            const [historyMachine, setHistoryMachine] = useState(null);
+
+            useEffect(() => {
+                const unsub1 = db.collection('orders').onSnapshot(snap => setOrders(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+                const unsub2 = db.collection('registro_produccion').onSnapshot(snap => setScannedItems(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+                const unsub3 = db.collection('registros_aprobados').onSnapshot(snap => setApprovedIds(new Set(snap.docs.map(d => d.id))));
+                return () => { unsub1(); unsub2(); unsub3(); };
+            }, []);
+
+            // Lógica de agrupación por máquina
+            const machineData = useMemo(() => {
+                const groups = {};
+                scannedItems.forEach(item => {
+                    const order = orders.find(o => String(o.id) === String(item.orderId));
+                    const mq = order?.maquina || item.maquina || '??';
+                    const isArchived = approvedIds.has(item.id);
+
+                    if (!groups[mq]) groups[mq] = { pending: [], archived: [] };
+                    if (isArchived) groups[mq].archived.push(item);
+                    else groups[mq].pending.push(item);
+                });
+                return groups;
+            }, [scannedItems, orders, approvedIds]);
+
+            const handleApprove = async (item) => {
+                await db.collection('registros_aprobados').doc(item.id).set({...item, fecha_aprobado: new Date().toISOString()});
+                // Aquí podrías agregar la lógica de actualizar la orden
+            };
+
+            const handleDelete = async (id) => {
+                if(confirm("¿Borrar?")) await db.collection('registro_produccion').doc(id).delete();
+            };
 
             return (
-                <div className="h-screen flex flex-col relative">
-                    <header className="p-4 flex justify-between items-center">
-                        <h1 className="text-xl font-bold text-pink-900">Viry <span className="text-pink-400">Panel</span></h1>
-                        <div className="flex gap-2">
-                            <button onClick={() => setChatOpen(true)} className="bg-white text-pink-500 p-3 rounded-full shadow-lg border border-pink-100 relative">
+                <div className="h-screen flex flex-col">
+                    {/* Header */}
+                    <header className="p-4 flex justify-between items-center z-50">
+                        <div>
+                            <h1 className="text-2xl font-black text-pink-900 leading-none">CIRINEO</h1>
+                            <p className="text-[10px] font-bold text-pink-400 tracking-widest">CONSOLIDADOR VIRY</p>
+                        </div>
+                        <div className="flex gap-3">
+                            <button onClick={() => setChatOpen(true)} className="bg-white p-3 rounded-full shadow-md text-pink-500 border border-pink-100 relative">
                                 <Icon name="message-circle"/>
                                 <span className="absolute top-0 right-0 w-3 h-3 bg-red-500 rounded-full border-2 border-white"></span>
                             </button>
-                            <button onClick={() => setIsScanning(true)} className="bg-pink-500 text-white px-4 py-2 rounded-full font-bold flex items-center gap-2 shadow-lg shadow-pink-200">
-                                <Icon name="scan"/> ESCANEAR
+                            <button className="bg-gradient-to-r from-pink-500 to-rose-400 text-white px-6 py-2 rounded-full font-bold shadow-lg flex items-center gap-2">
+                                <Icon name="scan" size={18}/> SCAN
                             </button>
                         </div>
                     </header>
 
-                    <main className="flex-1 p-4 overflow-x-auto flex gap-4">
-                        {/* Aquí irían las columnas de las máquinas (Misma lógica anterior) */}
-                        <div className="text-center w-full mt-20 opacity-30">
-                            <Icon name="layout" size={48} className="mb-2"/>
-                            <p>Esperando producción...</p>
-                        </div>
+                    {/* Tablero de Máquinas */}
+                    <main className="flex-1 overflow-x-auto overflow-y-hidden p-4 flex gap-4 scrollbar-hide">
+                        {Object.keys(machineData).sort().map(mq => (
+                            <div key={mq} className="machine-col flex flex-col h-full">
+                                <div className="glass-panel rounded-2xl p-4 mb-4 flex justify-between items-center shadow-sm">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-10 h-10 bg-pink-500 rounded-xl flex items-center justify-center text-white font-bold">{mq}</div>
+                                        <span className="text-xs font-bold text-gray-400">{machineData[mq].pending.length} Pend.</span>
+                                    </div>
+                                    <button onClick={() => setHistoryMachine(mq)} className="w-8 h-8 rounded-full bg-white flex items-center justify-center text-pink-300 hover:text-pink-500 border border-pink-50">
+                                        <Icon name="history" size={16}/>
+                                    </button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto space-y-4 pb-20 px-1">
+                                    {machineData[mq].pending.map(item => (
+                                        <ScanCard key={item.id} scan={item} onApprove={handleApprove} onDelete={handleDelete} />
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
                     </main>
 
+                    {/* Modales e Interfaces Adicionales */}
                     <ChatPanel isOpen={chatOpen} onClose={() => setChatOpen(false)} />
-                    <RadioPlayer />
-                    
-                    {/* El modal de Scanner de Viry aquí */}
+
+                    {/* Modal de Historial por Máquina */}
+                    {historyMachine && (
+                        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+                            <div className="bg-white rounded-3xl w-full max-w-sm max-h-[70vh] flex flex-col overflow-hidden">
+                                <div className="p-4 bg-pink-50 flex justify-between items-center">
+                                    <h3 className="font-bold">Aprobados Máquina {historyMachine}</h3>
+                                    <button onClick={() => setHistoryMachine(null)}><Icon name="x"/></button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                                    {machineData[historyMachine].archived.map(item => (
+                                        <div key={item.id} className="p-3 bg-gray-50 rounded-xl text-xs flex justify-between items-center opacity-60">
+                                            <div>
+                                                <div className="font-bold">{item.modelo}</div>
+                                                <div>Paquete {item.paquete_indice}</div>
+                                            </div>
+                                            <Icon name="check-circle" className="text-green-500"/>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Radio Footer */}
+                    <footer className="fixed bottom-0 inset-x-0 h-16 glass-panel border-t border-pink-100 flex items-center px-6 gap-4 z-40">
+                         <div className="w-10 h-10 rounded-full bg-pink-500 flex items-center justify-center text-white"><Icon name="music"/></div>
+                         <div className="flex-1 overflow-hidden">
+                            <p className="text-[10px] font-bold text-pink-400">RADIO CIRINEO</p>
+                            <p className="text-xs font-bold text-gray-700 truncate">Estaciones Populares de México</p>
+                         </div>
+                    </footer>
                 </div>
             );
         };
